@@ -48,7 +48,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           localStorage.setItem('airota_auth_user', JSON.stringify(profile));
         } else {
           const saved = localStorage.getItem('airota_auth_user');
-          if (!saved) {
+          if (saved) {
+            try {
+              const parsed = JSON.parse(saved);
+              // If it was a real Firebase account but Firebase Auth reports no active session, clear it
+              if (parsed && !parsed.uid?.startsWith('usr_')) {
+                setUser(null);
+                localStorage.removeItem('airota_auth_user');
+              }
+            } catch {
+              setUser(null);
+              localStorage.removeItem('airota_auth_user');
+            }
+          } else {
             setUser(null);
           }
         }

@@ -67,7 +67,32 @@ export const SimulatorPage: React.FC = () => {
       const activeApp = selectedApp || apps[0];
       const activeEnv = selectedEnv || activeApp?.environments[0];
 
-      // Fetch all releases or app-specific releases
+      // 1. Try querying the live REST endpoint (/api/v1/updates/check) if deployment key exists
+      if (activeEnv?.deploymentKey) {
+        try {
+          const params = new URLSearchParams({
+            deploymentKey: activeEnv.deploymentKey,
+            appVersion: deviceVersion,
+            platform,
+            currentHash: currentBundleHash,
+            deviceId,
+          });
+          const apiRes = await fetch(`/api/v1/updates/check?${params.toString()}`);
+          if (apiRes.ok) {
+            const apiData: UpdateCheckResponse = await apiRes.json();
+            addLog(`API check response: ${apiData.isAvailable ? 'Update available' : (apiData.message || 'No update')}`);
+            if (apiData.isAvailable) {
+              addLog(`Update found: ${apiData.fileName || 'bundle'} (${apiData.targetAppVersion})`);
+            }
+            setCheckResult(apiData);
+            return;
+          }
+        } catch {
+          // Fall through to Firestore client evaluation
+        }
+      }
+
+      // 2. Client-side evaluation against Firestore releases
       let releases = await fetchReleases(activeApp?.id, activeEnv?.id);
       if (releases.length === 0 && activeApp) {
         releases = await fetchReleases(activeApp.id);
@@ -142,6 +167,26 @@ export const SimulatorPage: React.FC = () => {
 
     addLog(`Verifying SHA-256 hash checksum... Match!`);
     addLog(`Hot-reloading React Native bundle into JavaScript runtime.`);
+
+    // Report telemetry to Firebase Analytics & increment downloadCount in Firestore
+    if (checkResult.updateId) {
+      try {
+        await fetch('/api/v1/updates/report', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            releaseId: checkResult.updateId,
+            event: 'applied',
+            platform,
+            deviceId,
+          }),
+        });
+        addLog(`[TELEMETRY] Recorded install in Firebase Analytics`);
+      } catch {
+        // Safe to ignore in offline local test
+      }
+    }
+
     setInstalledRelease(checkResult);
     setCurrentBundleHash(checkResult.bundleHash || '');
     setDownloading(false);

@@ -19,21 +19,14 @@ export async function fetchApps(userId: string): Promise<AppModel[]> {
   if (isFirebaseConfigured && db && userId && !userId.startsWith('usr_')) {
     try {
       const q = query(collection(db, 'apps'), where('ownerId', '==', userId));
-      const snapshot = await Promise.race([
-        getDocs(q),
-        new Promise<any>((_, reject) => setTimeout(() => reject(new Error('Firestore timeout')), 3000)),
-      ]);
-      if (snapshot && 'docs' in snapshot) {
-        const remoteApps = snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() } as AppModel));
-        const mergedMap = new Map<string, AppModel>();
-        localApps.forEach(a => mergedMap.set(a.id, a));
-        remoteApps.forEach((a: AppModel) => mergedMap.set(a.id, a));
-        const merged = Array.from(mergedMap.values()).sort((a, b) => b.createdAt - a.createdAt);
-        saveStoredApps(merged);
-        return merged;
-      }
+      const snapshot = await getDocs(q);
+      const remoteApps = snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() } as AppModel));
+      const sorted = remoteApps.sort((a, b) => b.createdAt - a.createdAt);
+      // Authoritative update of local storage cache
+      saveStoredApps(sorted);
+      return sorted;
     } catch (err) {
-      console.warn('Firestore fetch failed, checking local storage:', err);
+      console.warn('Firestore fetchApps failed, falling back to local storage cache:', err);
     }
   }
   return localApps;
@@ -45,10 +38,7 @@ export async function fetchAppById(appId: string, userId: string): Promise<AppMo
   if (isFirebaseConfigured && db && userId && !userId.startsWith('usr_')) {
     try {
       const docRef = doc(db, 'apps', appId);
-      const docSnap = await Promise.race([
-        getDoc(docRef),
-        new Promise<any>((_, reject) => setTimeout(() => reject(new Error('Firestore timeout')), 3000)),
-      ]);
+      const docSnap = await getDoc(docRef);
       if (docSnap && docSnap.exists()) {
         const app = { id: docSnap.id, ...docSnap.data() } as AppModel;
         return app.ownerId === userId ? app : null;
@@ -123,41 +113,37 @@ export async function createApp(input: CreateAppInput, userId: string): Promise<
     updatedAt: Date.now(),
   };
 
-  // Update local storage immediately for responsive UI
+  // Persist to Firestore first if configured for authenticated user
+  if (isFirebaseConfigured && db && !userId.startsWith('usr_')) {
+    try {
+      await setDoc(doc(db, 'apps', appId), newApp);
+    } catch (err: any) {
+      console.error('Firestore createApp error:', err);
+      throw new Error(`Failed to save application to Firestore: ${err.message}`);
+    }
+  }
+
+  // Update local storage cache
   const existing = getStoredApps();
   const updated = [newApp, ...existing.filter(a => a.id !== appId)];
   saveStoredApps(updated);
-
-  // Sync to Firestore if configured
-  if (isFirebaseConfigured && db && !userId.startsWith('usr_')) {
-    try {
-      await Promise.race([
-        setDoc(doc(db, 'apps', appId), newApp),
-        new Promise<void>(resolve => setTimeout(resolve, 2500)),
-      ]);
-    } catch (err) {
-      console.warn('Firestore createApp failed, using local cache:', err);
-    }
-  }
 
   return newApp;
 }
 
 export async function deleteApp(appId: string, userId: string): Promise<void> {
+  if (isFirebaseConfigured && db && !userId.startsWith('usr_')) {
+    try {
+      await deleteDoc(doc(db, 'apps', appId));
+    } catch (err: any) {
+      console.error('Firestore deleteApp error:', err);
+      throw new Error(`Failed to delete application from Firestore: ${err.message}`);
+    }
+  }
+
   const existing = getStoredApps();
   const updated = existing.filter(a => a.id !== appId);
   saveStoredApps(updated);
-
-  if (isFirebaseConfigured && db && !userId.startsWith('usr_')) {
-    try {
-      await Promise.race([
-        deleteDoc(doc(db, 'apps', appId)),
-        new Promise<void>(resolve => setTimeout(resolve, 2500)),
-      ]);
-    } catch (err) {
-      console.warn('Firestore deleteApp failed:', err);
-    }
-  }
 }
 
 export async function addEnvironment(
@@ -182,26 +168,24 @@ export async function addEnvironment(
 
   const updatedEnvironments = [...app.environments.filter(e => e.id !== envId), newEnv];
 
+  if (isFirebaseConfigured && db && !userId.startsWith('usr_')) {
+    try {
+      await updateDoc(doc(db, 'apps', appId), {
+        environments: updatedEnvironments,
+        updatedAt: Date.now(),
+      });
+    } catch (err: any) {
+      console.error('Firestore addEnvironment error:', err);
+      throw new Error(`Failed to update environment in Firestore: ${err.message}`);
+    }
+  }
+
   const apps = getStoredApps();
   const index = apps.findIndex(a => a.id === appId);
   if (index !== -1) {
     apps[index].environments = updatedEnvironments;
     apps[index].updatedAt = Date.now();
     saveStoredApps(apps);
-  }
-
-  if (isFirebaseConfigured && db && !userId.startsWith('usr_')) {
-    try {
-      await Promise.race([
-        updateDoc(doc(db, 'apps', appId), {
-          environments: updatedEnvironments,
-          updatedAt: Date.now(),
-        }),
-        new Promise<void>(resolve => setTimeout(resolve, 2500)),
-      ]);
-    } catch (err) {
-      console.warn('Firestore addEnvironment failed, updated local cache:', err);
-    }
   }
 
   return newEnv;

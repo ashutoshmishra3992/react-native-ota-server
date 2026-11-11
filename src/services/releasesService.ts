@@ -29,21 +29,16 @@ export async function fetchReleases(appId?: string, environmentId?: string): Pro
       if (appId) constraints.push(where('appId', '==', appId));
       if (environmentId) constraints.push(where('environmentId', '==', environmentId));
       
-      const querySnap = await Promise.race([
-        getDocs(query(q, ...constraints)),
-        new Promise<any>((_, reject) => setTimeout(() => reject(new Error('Firestore timeout')), 3000)),
-      ]);
-      if (querySnap && 'docs' in querySnap) {
-        const remoteReleases = querySnap.docs.map((d: any) => ({ id: d.id, ...d.data() } as ReleaseModel));
-        const mergedMap = new Map<string, ReleaseModel>();
-        localList.forEach(r => mergedMap.set(r.id, r));
-        remoteReleases.forEach((r: ReleaseModel) => mergedMap.set(r.id, r));
-        const merged = Array.from(mergedMap.values()).sort((a, b) => b.createdAt - a.createdAt);
-        saveStoredReleases(merged);
-        return merged;
+      const querySnap = await getDocs(query(q, ...constraints));
+      const remoteReleases = querySnap.docs.map((d: any) => ({ id: d.id, ...d.data() } as ReleaseModel));
+      const sorted = remoteReleases.sort((a, b) => b.createdAt - a.createdAt);
+
+      if (!appId && !environmentId) {
+        saveStoredReleases(sorted);
       }
+      return sorted;
     } catch (err) {
-      console.warn('Firestore fetchReleases failed, using local storage:', err);
+      console.warn('Firestore fetchReleases failed, using local storage cache:', err);
     }
   }
 
@@ -93,8 +88,9 @@ export async function createRelease(
         await uploadBytes(fileRef, input.file);
         onProgress?.(85);
         bundleUrl = await getDownloadURL(fileRef);
-      } catch (err) {
-        console.warn('Firebase Storage upload failed, using simulated storage URL:', err);
+      } catch (err: any) {
+        console.error('Firebase Storage upload failed:', err);
+        throw new Error(`Failed to upload bundle to Firebase Storage: ${err.message}`);
       }
     }
   }
@@ -121,21 +117,20 @@ export async function createRelease(
     createdAt: Date.now(),
   };
 
+  // Persist to Firestore first for authenticated users
+  if (isFirebaseConfigured && db && !userId.startsWith('usr_')) {
+    try {
+      await setDoc(doc(db, 'releases', releaseId), newRelease);
+    } catch (err: any) {
+      console.error('Firestore createRelease failed:', err);
+      throw new Error(`Failed to save release to Firestore: ${err.message}`);
+    }
+  }
+
   const existing = getStoredReleases();
   const updated = [newRelease, ...existing.filter(r => r.id !== releaseId)];
   saveStoredReleases(updated);
   onProgress?.(100);
-
-  if (isFirebaseConfigured && db && !userId.startsWith('usr_')) {
-    try {
-      await Promise.race([
-        setDoc(doc(db, 'releases', releaseId), newRelease),
-        new Promise<void>(resolve => setTimeout(resolve, 2500)),
-      ]);
-    } catch (err) {
-      console.warn('Firestore createRelease failed, saved to local cache:', err);
-    }
-  }
 
   return newRelease;
 }
@@ -144,25 +139,23 @@ export async function updateRelease(
   releaseId: string,
   updates: Partial<ReleaseModel>
 ): Promise<void> {
+  if (isFirebaseConfigured && db) {
+    try {
+      await updateDoc(doc(db, 'releases', releaseId), {
+        ...updates,
+        updatedAt: Date.now(),
+      });
+    } catch (err: any) {
+      console.error('Firestore updateRelease error:', err);
+      throw new Error(`Failed to update release in Firestore: ${err.message}`);
+    }
+  }
+
   const releases = getStoredReleases();
   const index = releases.findIndex(r => r.id === releaseId);
   if (index !== -1) {
     releases[index] = { ...releases[index], ...updates, updatedAt: Date.now() };
     saveStoredReleases(releases);
-  }
-
-  if (isFirebaseConfigured && db) {
-    try {
-      await Promise.race([
-        updateDoc(doc(db, 'releases', releaseId), {
-          ...updates,
-          updatedAt: Date.now(),
-        }),
-        new Promise<void>(resolve => setTimeout(resolve, 2500)),
-      ]);
-    } catch (err) {
-      console.warn('Firestore updateRelease failed, updated local cache:', err);
-    }
   }
 }
 

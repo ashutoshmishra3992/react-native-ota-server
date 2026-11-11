@@ -146,6 +146,11 @@ export const NewReleaseModal: React.FC<NewReleaseModalProps> = ({
       return;
     }
 
+    if (!file) {
+      setError('Please select or drop a React Native bundle file (.bundle or .zip) to upload.');
+      return;
+    }
+
     if (!user) {
       setError('You must be signed in to deploy releases.');
       return;
