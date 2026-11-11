@@ -1,5 +1,9 @@
 # AirOTA — React Native Over-The-Air (OTA) Updates Server & Dashboard
 
+[![Live Web App](https://img.shields.io/badge/Live%20Demo-airota--server--83921.web.app-4285F4?style=for-the-badge&logo=googlecloud&logoColor=white)](https://airota-server-83921.web.app)
+
+> 🌐 **Live Web Application & Dashboard:** [https://airota-server-83921.web.app](https://airota-server-83921.web.app)
+
 AirOTA is a production-grade, developer-friendly Over-The-Air (OTA) update platform designed specifically for **React Native 0.76+** and built with **React 19**, **Vite 6**, **Tailwind CSS**, and **Firebase (Hosting, Functions v2, Firestore, Storage)**.
 
 Deploy critical bug fixes and features directly to your users' devices in seconds — without waiting for App Store or Google Play reviews.
